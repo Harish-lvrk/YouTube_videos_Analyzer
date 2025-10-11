@@ -1,0 +1,8 @@
+streamlit
+yt-dlp
+langchain
+langchain-google-genai
+langchain-community
+faiss-cpu
+python-dotenv
+langchain-text-splitters
