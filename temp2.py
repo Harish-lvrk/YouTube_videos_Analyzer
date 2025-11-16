@@ -10,7 +10,7 @@ from langchain_chains import RetrievalQA
 from langchain_community.vectorstores import FAISS
 from langchain_core.documents import Document
 
-import google.generativeai as genai
+from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
 
 # YouTube loader
 from langchain_yt_dlp import YoutubeLoaderDL
@@ -88,47 +88,11 @@ if st.button("Analyze Video"):
                 chunks = splitter.split_text(transcript_text)
                 docs = [Document(page_content=c) for c in chunks]
 
+                # Initialize Google GenAI models
+                llm = ChatGoogleGenerativeAI(model="gemini-pro", temperature=0.3, google_api_key=GOOGLE_API_KEY)
+                embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001", google_api_key=GOOGLE_API_KEY)
 
-                # Configure google generative ai client
-                genai.configure(api_key=GOOGLE_API_KEY)
-
-                # Use the Google generative API directly for summary and embeddings.
-                class GoogleEmbeddingsWrapper:
-                    def __init__(self, model: str = "models/embedding-001"):
-                        self.model = model
-
-                    def embed_documents(self, texts):
-                        embeddings = []
-                        for t in texts:
-                            resp = genai.embed_content(self.model, t)
-                            # resp may be a dict with 'embedding' or a batch-style dict
-                            if isinstance(resp, dict) and "embedding" in resp:
-                                embeddings.append(resp["embedding"])
-                            elif isinstance(resp, dict) and "embeddings" in resp:
-                                # batch format
-                                embeddings.append(resp["embeddings"][0])
-                            else:
-                                # attempt to find numeric list anywhere
-                                # fallback: raise
-                                raise ValueError("Unexpected embedding response format")
-                        return embeddings
-
-                    def embed_query(self, text):
-                        return self.embed_documents([text])[0]
-
-                embeddings = GoogleEmbeddingsWrapper(model="models/embedding-001")
-
-                # Generate summary using the text-generation API
-                joined_text = "\n\n".join([d.page_content for d in docs])
-                prompt_text = f"Write a concise, easy-to-understand summary of this video transcript:\n\n{joined_text}\n\nCONCISE SUMMARY:" 
-                summary_resp = genai.generate_text(model="models/text-bison-001", prompt=prompt_text, temperature=0.2)
-                # generate_text returns a Completion-like object; try to extract text
-                if hasattr(summary_resp, 'candidates'):
-                    summary_text = summary_resp.candidates[0].content
-                else:
-                    summary_text = str(summary_resp)
-
-                # Build FAISS vector store using our embeddings wrapper
+                summary_text = generate_summary(docs, llm_model=llm)
                 vector_store = build_vector_store(docs, embeddings_model=embeddings)
 
                 st.session_state.transcript = transcript_text
@@ -180,18 +144,16 @@ Question:
 Helpful Answer:"""
                 QA_PROMPT = PromptTemplate(template=qa_prompt, input_variables=["context","question"])
 
-                # Perform retrieval locally and call Google GenAI for the final answer
-                retrieved_docs = st.session_state.vector_store.similarity_search(user_question, k=4)
-                context = "\n\n".join([d.page_content for d in retrieved_docs])
-                final_prompt = QA_PROMPT.format(context=context, question=user_question)
-                # Ensure client configured
-                genai.configure(api_key=GOOGLE_API_KEY)
-                answer_resp = genai.generate_text(model="models/text-bison-001", prompt=final_prompt, temperature=0.3)
-                if hasattr(answer_resp, 'candidates'):
-                    answer_text = answer_resp.candidates[0].content
-                else:
-                    answer_text = str(answer_resp)
+                retriever = st.session_state.vector_store.as_retriever(search_kwargs={"k":4})
+                qa_chain = RetrievalQA.from_chain_type(
+                    llm=ChatGoogleGenerativeAI(model="gemini-pro", temperature=0.3, google_api_key=GOOGLE_API_KEY),
+                    chain_type="stuff",
+                    retriever=retriever,
+                    return_source_documents=False,
+                    chain_type_kwargs={"prompt": QA_PROMPT}
+                )
+                result = qa_chain.run(user_question)
                 st.success("Here’s the answer:")
-                st.write(answer_text)
+                st.write(result)
         else:
             st.warning("Please enter a question.")

@@ -2,7 +2,8 @@ streamlit
 yt-dlp
 langchain
 langchain-google-genai
+langchain-yt-dlp
 langchain-community
 faiss-cpu
 python-dotenv
-langchain-text-splitters
+google-generativeai
